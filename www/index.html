@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Repositorio Local - Dinámico</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="header-controls">
+            <h1>📦 Repositorio Local</h1>
+            <button class="refresh-btn" id="refreshBtn">🔄 Actualizar</button>
+        </div>
+        <p>Listado dinámico - Clasifica archivos nuevos</p>
+    </header>
+    <div class="content" id="content">
+        <div class="loader">
+            <div class="spinner"></div>
+            <p>Cargando archivos...</p>
+        </div>
+    </div>
+</div>
+
+<!-- Modal para clasificar archivos nuevos (uno por uno) -->
+<div id="clasificarModal" class="modal">
+    <div class="modal-content" style="max-width: 450px; width: 90%;">
+        <h3>📝 Clasificar archivo nuevo</h3>
+        <div id="pasoContainer">
+            <p><strong id="nombreArchivo"></strong></p>
+            <label>Categoría:</label>
+            <input type="text" id="categoriaPaso" list="categoriasListPaso" placeholder="Elige o escribe una nueva" style="width:100%;" autocomplete="off">
+            <datalist id="categoriasListPaso"></datalist>
+            <label>Descripción (opcional):</label>
+            <input type="text" id="descripcionPaso" placeholder="Breve descripción" style="width:100%;">
+        </div>
+        <div style="margin-top: 1rem; display: flex; justify-content: space-between;">
+            <span id="contadorPaso"></span>
+            <div>
+                <button id="anteriorPaso" class="cancel-btn" style="display:none;">◀ Anterior</button>
+                <button id="siguientePaso" class="save-btn">Siguiente ▶</button>
+                <button id="guardarPaso" class="save-btn" style="display:none;">Guardar y cerrar</button>
+            </div>
+        </div>
+        <button id="cancelarModalPaso" class="cancel-btn" style="margin-top:1rem; width:100%;">Cancelar</button>
+    </div>
+</div>
+
+<!-- Modal para editar categoría/descripción de un archivo -->
+<div id="editarModal" class="modal">
+    <div class="modal-content">
+        <h3>✏️ Editar información</h3>
+        <p>Archivo: <strong id="editNombre"></strong></p>
+        <label>Categoría:</label>
+        <input type="text" id="editCategoria" list="categoriasList" placeholder="Elige o escribe una nueva">
+        <datalist id="categoriasList"></datalist>
+        <label>Descripción (opcional):</label>
+        <textarea id="editDescripcion" rows="2" placeholder="Descripción..."></textarea>
+        <button id="guardarEdicion" class="save-btn">Guardar</button>
+        <button id="cancelarEdicion" class="cancel-btn">Cancelar</button>
+    </div>
+</div>
+
+<!-- Modal para renombrar una categoría -->
+<div id="renombrarCategoriaModal" class="modal">
+    <div class="modal-content" style="max-width: 400px;">
+        <h3>✏️ Renombrar categoría</h3>
+        <p>Categoría actual: <strong id="categoriaActual"></strong></p>
+        <label>Nuevo nombre:</label>
+        <input type="text" id="nuevoNombreCategoria" placeholder="Nuevo nombre" style="width:100%;">
+        <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 0.5rem;">
+            <button id="guardarRenombrar" class="save-btn">Renombrar</button>
+            <button id="cancelarRenombrar" class="cancel-btn">Cancelar</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let archivosGlobal = [];
+    let nuevosArchivos = [];
+    let categoriasExistentes = [];
+    let categoriasTemp = [];
+    let pasoActual = 0;
+    let clasificacionesTemp = [];
+
+    // Capitalizar primera letra de cada palabra
+    function capitalizarPalabras(str) {
+        if (!str) return '';
+        return str.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+    }
+
+    // Aplicar capitalización en tiempo real a un input
+    function aplicarCapitalizacion(inputElement) {
+        if (!inputElement) return;
+        inputElement.addEventListener('input', function(e) {
+            let cursorPos = e.target.selectionStart;
+            let val = e.target.value;
+            let capitalized = capitalizarPalabras(val);
+            if (capitalized !== val) {
+                e.target.value = capitalized;
+                e.target.setSelectionRange(cursorPos, cursorPos);
+            }
+        });
+    }
+
+    async function cargarCategorias() {
+        try {
+            const response = await fetch('/api/categorias');
+            categoriasExistentes = await response.json();
+            actualizarDatalistGlobal();
+        } catch (error) {
+            console.error('Error cargando categorías:', error);
+        }
+    }
+
+    function actualizarDatalistGlobal() {
+        const datalist = document.getElementById('categoriasList');
+        if (datalist) {
+            datalist.innerHTML = '';
+            [...categoriasExistentes, ...categoriasTemp].forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat;
+                datalist.appendChild(option);
+            });
+        }
+        const datalistPaso = document.getElementById('categoriasListPaso');
+        if (datalistPaso) {
+            datalistPaso.innerHTML = '';
+            [...categoriasExistentes, ...categoriasTemp].forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat;
+                datalistPaso.appendChild(option);
+            });
+        }
+    }
+
+    async function cargarArchivos() {
+        const contentDiv = document.getElementById('content');
+        contentDiv.innerHTML = '<div class="loader"><div class="spinner"></div><p>Cargando archivos...</p></div>';
+        try {
+            const response = await fetch('/api/archivos');
+            archivosGlobal = await response.json();
+            renderizar(archivosGlobal);
+            await cargarCategorias();
+        } catch (error) {
+            contentDiv.innerHTML = `<p class="loader">Error: ${error.message}</p>`;
+        }
+    }
+
+    function renderizar(archivos) {
+        const contentDiv = document.getElementById('content');
+        if (!archivos.length) {
+            contentDiv.innerHTML = '<p class="loader">No hay archivos en la carpeta "archivos".</p>';
+            return;
+        }
+        const grupos = {};
+        archivos.forEach(arch => {
+            const cat = arch.categoria || "Sin categoría";
+            if (!grupos[cat]) grupos[cat] = [];
+            grupos[cat].push(arch);
+        });
+        const ordenCategorias = ["Herramientas y Utilidades", "Sistemas Operativos", "Microsoft Office", "Otros archivos"];
+        let html = '';
+        for (const cat of ordenCategorias) {
+            if (grupos[cat]) {
+                html += generarAcordeon(cat, grupos[cat]);
+                delete grupos[cat];
+            }
+        }
+        for (const cat in grupos) {
+            html += generarAcordeon(cat, grupos[cat]);
+        }
+        contentDiv.innerHTML = html;
+        document.querySelectorAll('.edit-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const nombre = btn.getAttribute('data-nombre');
+                abrirEdicion(nombre);
+            });
+        });
+        document.querySelectorAll('.rename-cat-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const categoria = btn.getAttribute('data-categoria');
+                abrirRenombrarCategoria(categoria);
+            });
+        });
+    }
+
+    function generarAcordeon(categoria, archivos) {
+        const badge = `<span class="badge">${archivos.length} elementos</span>`;
+        let lista = '<ul class="link-list">';
+        archivos.forEach(arch => {
+            const desc = arch.descripcion ? ` --${arch.descripcion}` : '';
+            lista += `<li>
+                        <div class="link-text">
+                            <a href="${arch.url}">${arch.nombre}</a>${desc}
+                            <span class="badge-categoria">${arch.categoria}</span>
+                        </div>
+                        <button class="edit-btn" data-nombre="${arch.nombre}">✏️ Editar</button>
+                      </li>`;
+        });
+        lista += '</ul>';
+        return `<details class="accordion" open>
+                    <summary>
+                        ${categoria} ${badge}
+                        <button class="rename-cat-btn" data-categoria="${categoria}" style="margin-left:1rem; background:#2a5f8a; border:none; color:white; border-radius:1rem; padding:0.2rem 0.6rem; font-size:0.7rem; cursor:pointer;">✏️ Renombrar categoría</button>
+                    </summary>
+                    ${lista}
+                </details>`;
+    }
+
+    async function verificarNuevos() {
+        try {
+            const response = await fetch('/api/nuevos');
+            nuevosArchivos = await response.json();
+            if (nuevosArchivos.length > 0) {
+                await cargarCategorias();
+                categoriasTemp = [];
+                iniciarClasificacionPasoAPaso();
+            } else {
+                mostrarToast("No hay archivos nuevos por clasificar", "#4caf50");
+            }
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function iniciarClasificacionPasoAPaso() {
+        pasoActual = 0;
+        clasificacionesTemp = [];
+        actualizarDatalistGlobal();
+        mostrarPaso();
+        document.getElementById('clasificarModal').style.display = 'block';
+    }
+
+    function mostrarPaso() {
+        const nombre = nuevosArchivos[pasoActual];
+        document.getElementById('nombreArchivo').innerText = nombre;
+        document.getElementById('categoriaPaso').value = '';
+        document.getElementById('descripcionPaso').value = '';
+        const tmp = clasificacionesTemp.find(c => c.nombre === nombre);
+        if (tmp) {
+            document.getElementById('categoriaPaso').value = tmp.categoria;
+            document.getElementById('descripcionPaso').value = tmp.descripcion;
+        }
+        document.getElementById('contadorPaso').innerText = `Archivo ${pasoActual+1} de ${nuevosArchivos.length}`;
+        const btnAnterior = document.getElementById('anteriorPaso');
+        const btnSiguiente = document.getElementById('siguientePaso');
+        const btnGuardar = document.getElementById('guardarPaso');
+        if (pasoActual === 0) {
+            btnAnterior.style.display = 'none';
+        } else {
+            btnAnterior.style.display = 'inline-block';
+        }
+        if (pasoActual === nuevosArchivos.length - 1) {
+            btnSiguiente.style.display = 'none';
+            btnGuardar.style.display = 'inline-block';
+        } else {
+            btnSiguiente.style.display = 'inline-block';
+            btnGuardar.style.display = 'none';
+        }
+    }
+
+    function guardarPasoActual() {
+        const nombre = nuevosArchivos[pasoActual];
+        let categoria = document.getElementById('categoriaPaso').value.trim();
+        const descripcion = document.getElementById('descripcionPaso').value.trim();
+        if (!categoria) {
+            alert("La categoría es obligatoria");
+            return false;
+        }
+        categoria = capitalizarPalabras(categoria);
+        if (!categoriasExistentes.includes(categoria) && !categoriasTemp.includes(categoria)) {
+            categoriasTemp.push(categoria);
+            actualizarDatalistGlobal();
+        }
+        const idx = clasificacionesTemp.findIndex(c => c.nombre === nombre);
+        if (idx >= 0) {
+            clasificacionesTemp[idx] = { nombre, categoria, descripcion };
+        } else {
+            clasificacionesTemp.push({ nombre, categoria, descripcion });
+        }
+        return true;
+    }
+
+    document.getElementById('siguientePaso').addEventListener('click', () => {
+        if (guardarPasoActual()) {
+            pasoActual++;
+            mostrarPaso();
+        }
+    });
+
+    document.getElementById('anteriorPaso').addEventListener('click', () => {
+        guardarPasoActual();
+        pasoActual--;
+        mostrarPaso();
+    });
+
+    document.getElementById('guardarPaso').addEventListener('click', async () => {
+        if (guardarPasoActual()) {
+            for (const item of clasificacionesTemp) {
+                await fetch('/api/clasificar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(item)
+                });
+            }
+            document.getElementById('clasificarModal').style.display = 'none';
+            mostrarToast("Todos los archivos clasificados correctamente", "#4caf50");
+            await cargarArchivos();
+            nuevosArchivos = [];
+            categoriasTemp = [];
+        }
+    });
+
+    document.getElementById('cancelarModalPaso').addEventListener('click', () => {
+        document.getElementById('clasificarModal').style.display = 'none';
+    });
+
+    function abrirEdicion(nombre) {
+        const archivo = archivosGlobal.find(a => a.nombre === nombre);
+        if (!archivo) return;
+        document.getElementById('editNombre').innerText = nombre;
+        document.getElementById('editCategoria').value = archivo.categoria;
+        document.getElementById('editDescripcion').value = archivo.descripcion;
+        actualizarDatalistGlobal();
+        document.getElementById('editarModal').style.display = 'block';
+        window.currentEditNombre = nombre;
+    }
+
+    document.getElementById('guardarEdicion').addEventListener('click', async () => {
+        const nombre = window.currentEditNombre;
+        let categoria = document.getElementById('editCategoria').value.trim();
+        const descripcion = document.getElementById('editDescripcion').value.trim();
+        if (!categoria) {
+            alert("La categoría no puede estar vacía");
+            return;
+        }
+        categoria = capitalizarPalabras(categoria);
+        const response = await fetch('/api/editar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nombre, categoria, descripcion })
+        });
+        if (response.ok) {
+            document.getElementById('editarModal').style.display = 'none';
+            mostrarToast("Información actualizada", "#4caf50");
+            await cargarCategorias();
+            await cargarArchivos();
+        } else {
+            alert("Error al guardar");
+        }
+    });
+
+    document.getElementById('cancelarEdicion').addEventListener('click', () => {
+        document.getElementById('editarModal').style.display = 'none';
+    });
+
+    function abrirRenombrarCategoria(categoriaActual) {
+        document.getElementById('categoriaActual').innerText = categoriaActual;
+        document.getElementById('nuevoNombreCategoria').value = '';
+        document.getElementById('renombrarCategoriaModal').style.display = 'block';
+        window.categoriaARenombrar = categoriaActual;
+    }
+
+    document.getElementById('guardarRenombrar').addEventListener('click', async () => {
+        const vieja = window.categoriaARenombrar;
+        let nueva = document.getElementById('nuevoNombreCategoria').value.trim();
+        if (!nueva) {
+            alert("Debe ingresar un nuevo nombre");
+            return;
+        }
+        nueva = capitalizarPalabras(nueva);
+        if (vieja === nueva) {
+            mostrarToast("El nombre no cambió", "#ff9800");
+            document.getElementById('renombrarCategoriaModal').style.display = 'none';
+            return;
+        }
+        const response = await fetch('/api/renombrar_categoria', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vieja, nueva })
+        });
+        if (response.ok) {
+            mostrarToast("Categoría renombrada correctamente", "#4caf50");
+            document.getElementById('renombrarCategoriaModal').style.display = 'none';
+            await cargarCategorias();
+            await cargarArchivos();
+        } else {
+            const error = await response.json();
+            alert("Error: " + (error.error || "No se pudo renombrar"));
+        }
+    });
+
+    document.getElementById('cancelarRenombrar').addEventListener('click', () => {
+        document.getElementById('renombrarCategoriaModal').style.display = 'none';
+    });
+
+    function mostrarToast(mensaje, color) {
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.style.background = color;
+        toast.innerText = mensaje;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+        await cargarArchivos();
+        await verificarNuevos();
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+        aplicarCapitalizacion(document.getElementById('categoriaPaso'));
+        aplicarCapitalizacion(document.getElementById('descripcionPaso'));
+        aplicarCapitalizacion(document.getElementById('editCategoria'));
+        aplicarCapitalizacion(document.getElementById('nuevoNombreCategoria'));
+    });
+
+    cargarArchivos().then(() => verificarNuevos());
+</script>
+</body>
+</html>
